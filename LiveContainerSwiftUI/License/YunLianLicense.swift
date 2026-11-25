@@ -151,7 +151,10 @@ enum YunLianLicense {
     private static let kcAccount = "yunlian.machine.id"
 
     /// 稳定的机器特征码：优先 Keychain，没有则生成一个 UUID 存入 Keychain
+    private static var _cachedMachineId: String?
+
     static func machineId() -> String {
+        if let cached = _cachedMachineId { return cached }
         // 读取
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -163,6 +166,7 @@ enum YunLianLicense {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecSuccess, let data = result as? Data, let s = String(data: data, encoding: .utf8), !s.isEmpty {
+            _cachedMachineId = s
             return s
         }
         // 生成新 ID
@@ -176,11 +180,15 @@ enum YunLianLicense {
         ]
         SecItemDelete(query as CFDictionary)
         SecItemAdd(attrs as CFDictionary, nil)
+        _cachedMachineId = newId
         return newId
     }
 
     /// 展示用机器码：SHA256("show::" + machineId) 前 16 位，XXXX-XXXX-XXXX-XXXX
+    private static var _cachedMachineCode: String?
+
     static func machineCode() -> String {
+        if let c = _cachedMachineCode { return c }
         let hex = SHA256.hash(data: Data(("show::" + machineId()).utf8))
             .map { String(format: "%02x", $0) }.joined().prefix(16).uppercased()
         var s = ""
@@ -188,6 +196,7 @@ enum YunLianLicense {
             if i > 0 && i % 4 == 0 { s += "-" }
             s.append(ch)
         }
+        _cachedMachineCode = s
         return s
     }
 }

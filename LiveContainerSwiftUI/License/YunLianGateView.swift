@@ -9,6 +9,7 @@ import SwiftUI
 
 struct YunLianGateView: View {
     @StateObject private var license = YunLianLicenseService.shared
+    @State private var didCheck = false
 
     var body: some View {
         Group {
@@ -35,6 +36,8 @@ struct YunLianGateView: View {
             }
         }
         .task {
+            guard !didCheck else { return }
+            didCheck = true
             await license.checkOnLaunch()
         }
     }

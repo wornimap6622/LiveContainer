@@ -18,7 +18,7 @@ final class YunLianLicenseService: ObservableObject {
     /// 清单模式（严格 = 必须登记）
     static let strictList = true
     /// 网络超时
-    private let netTimeout: TimeInterval = 12
+    private let netTimeout: TimeInterval = 5
     /// 清单缓存时长
     private let listTTL: TimeInterval = 90
     /// 离线宽限（在线校验失败后允许离线启动的时长）
