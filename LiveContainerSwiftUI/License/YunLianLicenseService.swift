@@ -121,6 +121,8 @@ final class YunLianLicenseService: ObservableObject {
         if r.ok {
             UserDefaults.standard.set(code, forKey: "yunlian.license.code")
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "yunlian.license.verifiedAt")
+            // 同时写 Keychain：重装云连/换容器后 UserDefaults 会丢，Keychain 不会
+            YunLianLicense.saveStoredCode(code)
             state = .authorized
         }
         return r
@@ -130,8 +132,8 @@ final class YunLianLicenseService: ObservableObject {
 
     func checkOnLaunch() async {
         state = .checking
-        // 是否有已激活的码
-        guard let code = UserDefaults.standard.string(forKey: "yunlian.license.code"),
+        // 是否有已激活的码（Keychain 优先，容器重建也能恢复）
+        guard let code = YunLianLicense.loadStoredCode(),
               !code.isEmpty else {
             state = .needsActivation(reason: "no_session")
             return

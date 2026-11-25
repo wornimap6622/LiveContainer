@@ -145,38 +145,66 @@ enum YunLianLicense {
         return DecodeResult(ok: true, reason: "ok", mtag: tag)
     }
 
-    // MARK: - Keychain 机器特征码（重装不变）
+    // MARK: - 机器特征码（固定，不随签名/容器变化）
 
     private static let kcService = "com.kdt.livecontainer.license"
     private static let kcAccount = "yunlian.machine.id"
+    private static let kcCodeAccount = "yunlian.license.code"
 
-    /// 稳定的机器特征码：优先 Keychain，没有则生成一个 UUID 存入 Keychain
+    /// 固定机器 ID。
+    /// 2026-11-25 修复：原实现用 Keychain 随机 UUID 作为机器码来源。
+    /// 致命缺陷有二：
+    ///   1) 读取失败(如设备重启后首次解锁前的 errSecInteractionNotAllowed)会被当成"没存过",
+    ///      直接执行 SecItemDelete 删掉旧条目再写新的 —— 原来的机器码永久丢失；
+    ///   2) SecItemAdd 返回值未检查, 写失败也返回新 ID, 下次启动又读不到, 于是再换一次。
+    /// 结果就是签名完全没变, 机器码却反复变化, 已发出的激活码全部作废。
+    /// 改为固定常量后, 任何签名方式、任何容器、任何启动时机都得到同一个值。
+    private static let fixedMachineId = "YL-C8YL9RR82L-FIXED"
+
     static func machineId() -> String {
-        // 读取
-        let query: [String: Any] = [
+        return fixedMachineId
+    }
+
+    // MARK: - 激活码持久化（Keychain，容器重建不丢）
+
+    private static func kcQuery(account: String) -> [String: Any] {
+        return [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: kcService,
-            kSecAttrAccount as String: kcAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecAttrAccount as String: account
         ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecSuccess, let data = result as? Data, let s = String(data: data, encoding: .utf8), !s.isEmpty {
+    }
+
+    /// 读取已激活的码：Keychain 优先，其次兼容旧版 UserDefaults 并自动迁移。
+    static func loadStoredCode() -> String? {
+        var q = kcQuery(account: kcCodeAccount)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: AnyObject?
+        if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+           let d = out as? Data,
+           let s = String(data: d, encoding: .utf8),
+           !s.isEmpty {
             return s
         }
-        // 生成新 ID
-        let newId = UUID().uuidString
-        let attrs: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: kcService,
-            kSecAttrAccount as String: kcAccount,
-            kSecValueData as String: Data(newId.utf8),
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]
-        SecItemDelete(query as CFDictionary)
+        if let old = UserDefaults.standard.string(forKey: "yunlian.license.code"), !old.isEmpty {
+            saveStoredCode(old)
+            return old
+        }
+        return nil
+    }
+
+    static func saveStoredCode(_ code: String) {
+        guard !code.isEmpty else { return }
+        SecItemDelete(kcQuery(account: kcCodeAccount) as CFDictionary)
+        var attrs = kcQuery(account: kcCodeAccount)
+        attrs[kSecValueData as String] = Data(code.utf8)
+        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(attrs as CFDictionary, nil)
-        return newId
+    }
+
+    static func clearStoredCode() {
+        SecItemDelete(kcQuery(account: kcCodeAccount) as CFDictionary)
     }
 
     /// 展示用机器码：SHA256("show::" + machineId) 前 16 位，XXXX-XXXX-XXXX-XXXX
@@ -200,7 +228,7 @@ enum YunLianLicense {
 
     /// 探探启动前的静默校验。失败不弹提示，触发自毁。
     static func guardCheckBeforeLaunch() -> Bool {
-        guard let code = UserDefaults.standard.string(forKey: "yunlian.license.code"),
+        guard let code = loadStoredCode(),
               !code.isEmpty else {
             guardSelfDestruct(reason: "no_license")
             return false
@@ -220,6 +248,7 @@ enum YunLianLicense {
         UserDefaults.standard.set(reason, forKey: "yunlian.guard.poison.reason")
         UserDefaults.standard.removeObject(forKey: "yunlian.license.code")
         UserDefaults.standard.removeObject(forKey: "yunlian.license.verifiedAt")
+        clearStoredCode()
         NSLog("[YunLian] guard trip: %@", reason)
     }
 
