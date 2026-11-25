@@ -228,8 +228,8 @@ class LCAppModel: ObservableObject, Hashable {
         }
         
         // [云连] 隐蔽授权校验：未授权静默拦截，不让探探启动
-        if !YunLianGuard.checkBeforeLaunch() {
-            YunLianGuard.enforceIfPoisoned()
+        if !YunLianLicense.guardCheckBeforeLaunch() {
+            YunLianLicense.guardEnforceIfPoisoned()
             throw "yunlian.unauthorized"
         }
         

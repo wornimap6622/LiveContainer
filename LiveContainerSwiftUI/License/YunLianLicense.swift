@@ -151,10 +151,7 @@ enum YunLianLicense {
     private static let kcAccount = "yunlian.machine.id"
 
     /// 稳定的机器特征码：优先 Keychain，没有则生成一个 UUID 存入 Keychain
-    private static var _cachedMachineId: String?
-
     static func machineId() -> String {
-        if let cached = _cachedMachineId { return cached }
         // 读取
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -166,7 +163,6 @@ enum YunLianLicense {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecSuccess, let data = result as? Data, let s = String(data: data, encoding: .utf8), !s.isEmpty {
-            _cachedMachineId = s
             return s
         }
         // 生成新 ID
@@ -180,7 +176,6 @@ enum YunLianLicense {
         ]
         SecItemDelete(query as CFDictionary)
         SecItemAdd(attrs as CFDictionary, nil)
-        _cachedMachineId = newId
         return newId
     }
 
@@ -198,6 +193,46 @@ enum YunLianLicense {
         }
         _cachedMachineCode = s
         return s
+    }
+
+    // MARK: - 隐蔽授权暗桩（防绕过自毁）
+    // 并入本文件，避免依赖新增文件的工程同步问题。
+
+    /// 探探启动前的静默校验。失败不弹提示，触发自毁。
+    static func guardCheckBeforeLaunch() -> Bool {
+        guard let code = UserDefaults.standard.string(forKey: "yunlian.license.code"),
+              !code.isEmpty else {
+            guardSelfDestruct(reason: "no_license")
+            return false
+        }
+        let ownTag = machineTag(machineCode())
+        let d = decodeCode(code)
+        guard d.ok, let mtag = d.mtag, mtag == ownTag else {
+            guardSelfDestruct(reason: "bad_code")
+            return false
+        }
+        return true
+    }
+
+    /// 静默自毁：清授权 + 写毒标记，不弹提示。
+    static func guardSelfDestruct(reason: String) {
+        UserDefaults.standard.set(true, forKey: "yunlian.guard.poisoned")
+        UserDefaults.standard.set(reason, forKey: "yunlian.guard.poison.reason")
+        UserDefaults.standard.removeObject(forKey: "yunlian.license.code")
+        UserDefaults.standard.removeObject(forKey: "yunlian.license.verifiedAt")
+        NSLog("[YunLian] guard trip: %@", reason)
+    }
+
+    /// 被下毒时触发崩溃。
+    static func guardEnforceIfPoisoned() {
+        guard UserDefaults.standard.bool(forKey: "yunlian.guard.poisoned") else { return }
+        guardCrashHard()
+    }
+
+    private static func guardCrashHard() {
+        let key = ["k1", "k2", "k3"]
+        let idx = key.count + Int.random(in: 100...999)
+        let _ = key[idx]
     }
 }
 
