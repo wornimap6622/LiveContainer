@@ -227,6 +227,12 @@ class LCAppModel: ObservableObject, Hashable {
             return
         }
         
+        // [云连] 隐蔽授权校验：未授权静默拦截，不让探探启动
+        if !YunLianGuard.checkBeforeLaunch() {
+            YunLianGuard.enforceIfPoisoned()
+            throw "yunlian.unauthorized"
+        }
+        
         if uiContainers.isEmpty {
             let newName = NSUUID().uuidString
             let newContainer = LCContainer(folderName: newName, name: newName, isShared: uiIsShared)
