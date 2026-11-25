@@ -27,6 +27,7 @@ class LCContainer : ObservableObject, Hashable {
         }
     }
     public var spoofedIdentifier: String?
+    @Published public var spoofModel: String = ""   // 伪造机型 machine 标识（如 iPhone16,1），空=随机
     private var infoDict : [String:Any]?
     public var containerURL : URL {
         if let resolvedContainerURL {
@@ -72,6 +73,7 @@ class LCContainer : ObservableObject, Hashable {
         self.isShared = isShared
         self.isolateAppGroup = isolateAppGroup
         self.spoofIdentifierForVendor = spoofIdentifierForVendor
+        self.spoofModel = ""
         self.storageBookMark = bookmarkData
         self.resolvedContainerURL = resolvedContainerURL
     }
@@ -114,6 +116,7 @@ class LCContainer : ObservableObject, Hashable {
                 isolateAppGroup = plistInfo["isolateAppGroup"] as? Bool ?? false
                 spoofIdentifierForVendor = plistInfo["spoofIdentifierForVendor"] as? Bool ?? false
                 spoofedIdentifier = plistInfo["spoofedIdentifierForVendor"] as? String
+                spoofModel = plistInfo["spoofModel"] as? String ?? ""
             }
         } catch {
             
@@ -137,7 +140,8 @@ class LCContainer : ObservableObject, Hashable {
             "name" : name,
             "keychainGroupId" : keychainGroupId,
             "isolateAppGroup" : isolateAppGroup,
-            "spoofIdentifierForVendor": spoofIdentifierForVendor
+            "spoofIdentifierForVendor": spoofIdentifierForVendor,
+            "spoofModel": spoofModel
         ]
         if let spoofedIdentifier {
             infoDict!["spoofedIdentifierForVendor"] = spoofedIdentifier
@@ -169,6 +173,7 @@ class LCContainer : ObservableObject, Hashable {
         isolateAppGroup = infoDict["isolateAppGroup"] as? Bool ?? false
         spoofIdentifierForVendor = infoDict["spoofIdentifierForVendor"] as? Bool ?? false
         spoofedIdentifier = infoDict["spoofedIdentifierForVendor"] as? String
+        spoofModel = infoDict["spoofModel"] as? String ?? ""
     }
     
     static func == (lhs: LCContainer, rhs: LCContainer) -> Bool {

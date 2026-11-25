@@ -17,6 +17,36 @@ protocol LCContainerViewDelegate {
     func getBundleId() -> String
 }
 
+// 伪造机型列表（machine 标识 -> 显示名）
+private let SPOOF_MODELS: [(machine: String, name: String)] = [
+    ("", "随机机型"),
+    ("iPhone12,1", "iPhone 11"),
+    ("iPhone12,3", "iPhone 11 Pro"),
+    ("iPhone12,5", "iPhone 11 Pro Max"),
+    ("iPhone12,8", "iPhone SE (2nd)"),
+    ("iPhone13,1", "iPhone 12 mini"),
+    ("iPhone13,2", "iPhone 12"),
+    ("iPhone13,3", "iPhone 12 Pro"),
+    ("iPhone14,2", "iPhone 13 Pro"),
+    ("iPhone14,3", "iPhone 13 Pro Max"),
+    ("iPhone15,2", "iPhone 14 Pro"),
+    ("iPhone15,3", "iPhone 14 Pro Max"),
+    ("iPhone15,4", "iPhone 15"),
+    ("iPhone15,5", "iPhone 15 Plus"),
+    ("iPhone16,1", "iPhone 15 Pro"),
+    ("iPhone16,2", "iPhone 15 Pro Max"),
+    ("iPhone17,1", "iPhone 16 Pro"),
+    ("iPhone17,2", "iPhone 16 Pro Max"),
+    ("iPhone17,3", "iPhone 16"),
+    ("iPhone17,4", "iPhone 16 Plus"),
+    ("iPhone18,1", "iPhone 17 Pro"),
+    ("iPhone18,2", "iPhone 17 Pro Max"),
+    ("iPhone18,3", "iPhone 17"),
+    ("iPhone18,4", "iPhone Air"),
+    ("iPhone19,3", "iPhone 18 Pro"),
+    ("iPhone19,4", "iPhone 18 Pro Max"),
+]
+
 struct LCContainerView : View {
     @ObservedObject var container : LCContainer
     let delegate : LCContainerViewDelegate
@@ -111,6 +141,17 @@ struct LCContainerView : View {
                                     saveIDFV()
                                 }
                         }
+                    }
+                    
+                    Picker(selection: $container.spoofModel) {
+                        ForEach(SPOOF_MODELS, id: \.machine) { m in
+                            Text(m.name).tag(m.machine)
+                        }
+                    } label: {
+                        Text("伪造机型")
+                    }
+                    .onChange(of: container.spoofModel) { newValue in
+                        saveModel()
                     }
                 }
 
@@ -241,6 +282,24 @@ struct LCContainerView : View {
             return
         }
         container.spoofedIdentifier = newIDFV.uuidString
+        delegate.saveContainer(container: container)
+    }
+
+    func saveModel() {
+        // 1. 写 .xh_spoof_model.txt 到容器 Documents，供 XHSpoof 读取
+        let docDir = LCPath.dataPath.appendingPathComponent(container.folderName).appendingPathComponent("Documents")
+        do {
+            try FileManager.default.createDirectory(at: docDir, withIntermediateDirectories: true)
+            let specPath = docDir.appendingPathComponent(".xh_spoof_model.txt")
+            try container.spoofModel.write(to: specPath, atomically: true, encoding: .utf8)
+            // 删除旧身份，强制下次启动按新机型重新生成
+            let identPath = docDir.appendingPathComponent(".xh_spoof_identity.plist")
+            if FileManager.default.fileExists(atPath: identPath.path) {
+                try FileManager.default.removeItem(at: identPath)
+            }
+        } catch {
+            // 容器目录不存在时忽略，下次启动探探前会再写
+        }
         delegate.saveContainer(container: container)
     }
 
