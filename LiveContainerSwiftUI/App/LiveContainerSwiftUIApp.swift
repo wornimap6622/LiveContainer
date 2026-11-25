@@ -114,6 +114,8 @@ struct LiveContainerSwiftUIApp : SwiftUI.App {
     var body: some Scene {
         WindowGroup(id: "Main") {
             LCTabView()
+                .preferredColorScheme(.dark)
+                .tint(Color(red: 0.0, green: 0.941, blue: 1.0))
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .environmentObject(DataManager.shared.model)
                 .environmentObject(LCAppSortManager.shared)

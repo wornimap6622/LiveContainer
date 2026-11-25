@@ -192,6 +192,7 @@ struct LCSettingsView: View {
                 }
                 }
                 
+                if false { // [云连] 隐藏 32-bit emulator 区块，代码保留
                 Section {
                     Picker(selection: $selected32BitEmulator) {
                         ForEach(sharedModel.arm32EmuApps, id: \.self) { app in
@@ -201,6 +202,7 @@ struct LCSettingsView: View {
                     } label: {
                         Text("lc.settings.selected32BitEmulator".loc)
                     }
+                }
                 }
                 
                 Section{
@@ -286,10 +288,12 @@ struct LCSettingsView: View {
                 }
                 
                 Section {
+                    /* [云连] QQ 联系方式已隐藏
                     HStack {
                         Image(systemName: "message.fill")
                         Text("QQ：244800471")
                     }
+                    */
                     HStack {
                         Image(systemName: "paperplane.fill")
                         Text("飞机：@nimingzhee")

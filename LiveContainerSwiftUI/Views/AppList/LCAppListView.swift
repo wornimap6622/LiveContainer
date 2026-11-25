@@ -233,6 +233,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                         }
                     }
                 }
+                /* [云连] 隐藏左上角 SideStore/Help 按钮，代码保留
                 ToolbarItem(placement: .topBarLeading) {
                     if(UserDefaults.sideStoreExist()) {
                         Button {
@@ -250,6 +251,7 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     
 
                 }
+                */
                 
                 /* [云连] 隐藏“打开链接”按钮，代码保留
                 ToolbarItem(placement: .topBarTrailing) {

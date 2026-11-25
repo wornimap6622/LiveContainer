@@ -306,6 +306,7 @@ struct LCJITLessDiagnoseView : View {
                     }
                     .disabled(isJITLessTestInProgress)
                     
+                    if false { // [云连] 隐藏“获取帮助”按钮，代码保留
                     Button {
                         getHelp()
                     } label: {
@@ -313,6 +314,7 @@ struct LCJITLessDiagnoseView : View {
                         Text("lc.jitlessDiag.getHelp".loc)
                             .bold()
                             .rainbow()
+                    }
                     }
                 }
 
