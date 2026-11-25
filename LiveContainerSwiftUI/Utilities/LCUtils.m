@@ -450,9 +450,7 @@
 }
 
 + (NSString *)getVersionInfo {
-    return [NSString stringWithFormat:@"Version %@-%@",
-            NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"],
-            NSBundle.mainBundle.infoDictionary[@"LCVersionInfo"]];
+    return @"云连1.1版本";
 }
 
 + (NSData*)bookmarkForURL:(NSURL*) url {

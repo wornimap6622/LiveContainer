@@ -159,6 +159,7 @@ struct LCSettingsView: View {
                     }
                 }
                 
+                if false { // [云连] 隐藏 JIT 区块，功能代码保留
                 Section {
                     if JITEnabler == .SideJITServer || JITEnabler == .JITStreamerEBLegacy {
                         HStack {
@@ -188,6 +189,7 @@ struct LCSettingsView: View {
                     Text("JIT")
                 } footer: {
                     Text("lc.settings.JitDesc".loc)
+                }
                 }
                 
                 Section {
@@ -285,22 +287,12 @@ struct LCSettingsView: View {
                 
                 Section {
                     HStack {
-                        Image("GitHub")
-                        Button("LiveContainer/LiveContainer") {
-                            openGitHub()
-                        }
+                        Image(systemName: "message.fill")
+                        Text("QQ：244800471")
                     }
                     HStack {
-                        Image("Twitter")
-                        Button("khanhduytran0") {
-                            openTwitter()
-                        }
-                    }
-                    HStack {
-                        Image("GitHub")
-                        Button("Huge_Black") {
-                            openGitHub2()
-                        }
+                        Image(systemName: "paperplane.fill")
+                        Text("飞机：@nimingzhee")
                     }
                 } header: {
                     Text("lc.settings.about".loc)

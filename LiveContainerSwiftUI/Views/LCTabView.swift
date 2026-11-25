@@ -23,7 +23,7 @@ struct LCTabView: View {
     
     var body: some View {
         TabView(selection: $sharedModel.selectedTab) {
-            if DataManager.shared.model.multiLCStatus != 2 {
+            if false { // [云连] 隐藏该 tab，功能代码保留
                 LCSourcesView()
                     .tabItem {
                         Label("lc.tabView.sources".loc, systemImage: "books.vertical")
@@ -35,7 +35,7 @@ struct LCTabView: View {
                     Label("lc.tabView.apps".loc, systemImage: "square.stack.3d.up.fill")
                 }
                 .tag(LCTabIdentifier.apps)
-            if DataManager.shared.model.multiLCStatus != 2 {
+            if false { // [云连] 隐藏该 tab，功能代码保留
                 LCTweaksView()
                     .tabItem{
                         Label("lc.tabView.tweaks".loc, systemImage: "wrench.and.screwdriver")

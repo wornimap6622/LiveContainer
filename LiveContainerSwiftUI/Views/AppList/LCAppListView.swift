@@ -251,11 +251,13 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
                 }
                 
+                /* [云连] 隐藏“打开链接”按钮，代码保留
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("lc.appList.openLink".loc, systemImage: "link", action: {
                         Task { await onOpenWebViewTapped() }
                     })
                 }
+                */
                 
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
