@@ -1,0 +1,30 @@
+探探检测字段补全补丁 (2026-11-25)
+=====================================
+问题：XHSpoof 原版伪装 24 项身份字段，但探探实际读取的下列字段
+      完全没被伪装，造成真值泄露与交叉校验矛盾。
+
+本次补全：
+1. 机型池 25 款机型全部加入真实监管型号 regModel（A2223/A2217...）
+2. 身份字典新增硬件级字段：
+   - dieId / ioupuid / bootUuid  （硬件唯一值，原来裸奔）
+   - battery / batteryState      （电量为真值泄露）
+   - rat / onwifi                （网络制式与 WiFi 联动，消除 4G+WiFi 矛盾）
+   - regmodel                    （与机型自洽）
+3. oneid 原来生成后从未使用（死字段）-> 现已接入 MGCopyAnswer 真实读取路径
+4. 新增 SDK 持久标识随机值：
+   localId / ms_mid / WEIBOSDKAID / AppsFlyerUserId /
+   cmcc unique id / momo uuid / cdid / APP_TOKEN / VENDOR_TOKEN
+   -> 通过 MGCopyAnswer + NSUserDefaults 双路径覆写
+5. 新增 SyncTantanPlists()：
+   启动时把探探包内插件写的 deep_env.plist / spoof_identity.plist
+   硬件字段同步为 XHSpoof 同一套身份，消除两套身份打架
+6. 新增 hook：batteryLevel / batteryState / brightness /
+   currentRadioAccessTechnology / serviceCurrentRadioAccessTechnology
+
+编译验证：Mac THEOS，arm64+arm64e FAT，340320 字节
+md5: 0234b8a736c0932c1c666d82b02e66ef
+
+部署方式：把 XHSpoof_gapfix.dylib 覆盖容器内 Tweaks/XHSpoof.dylib，
+或替换 IPA 内 Tweaks + Frameworks 两处的 XHSpoof.dylib 后重签。
+注意：本补丁未改云端伪造机型版源码（run#11/#12 仍排队），
+待云端出包后可再合并。
