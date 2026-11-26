@@ -168,7 +168,7 @@ static IMP _getOrigImp(NSString *clsName, SEL sel) {
 //            用于确认自动招呼是否触发/发送成功, 不会像全量日志那样触发系统资源限制。
 // ============================================================
 #define XH_DEBUG_LOG 0
-#define XH_DEBUG_LOG_KEYWORD 1
+#define XH_DEBUG_LOG_KEYWORD 0
 
 static void XLog(NSString *fmt, ...) {
 #if XH_DEBUG_LOG
@@ -202,14 +202,14 @@ static void XLog(NSString *fmt, ...) {
 }
 
 // ============================================================
-// 随机指纹生成器 + 首次启动清理 (随机不重复)
+// 随机指纹生成器 (首次启动只生成, 不清理)
 // ============================================================
 // 设计:
-//   1. 首次启动(无 spoof_identity.plist)时, 随机生成 IDFV/IDFA/localId/oneid,
+//   1. 无 spoof_identity.plist 时(新装/新容器), 随机生成 IDFV/IDFA/localId/oneid,
 //      写入探探沙盒 Documents/spoof_identity.plist 持久化, 之后每次启动复用同一份。
-//   2. 首次启动时清理 keychain / NSUserDefaults / MMKV 里的旧设备指纹残留,
-//      确保换机后服务端拿到的是全新指纹(不关联旧号)。
-//   3. 重新换机 = 删除 spoof_identity.plist + 触发首次启动清理, 重新随机。
+//   2. 启动时绝不做任何清理: _cleanupFirstLaunch / _isFirstLaunch 已停止调用
+//      (构造函数里只剩 pending 标记驱动的 _fullCleanupSandbox)。
+//   3. 换机 = 面板"一键新机" -> 写 pending_full_cleanup.flag -> 下次启动彻底清空 + 重新随机。
 // ============================================================
 
 // 随机 UUID (v4 格式, 8-4-4-4-12)

@@ -49,7 +49,8 @@ void XHResetLocation(void) {
 }
 
 static void LH_log(NSString *m) {
-    NSLog(@"[定位] %@", m);
+    (void)m;
+    return;   // 干净版：完全静音，不写文件不 NSLog
     @try {
         NSArray *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *p = [docs[0] stringByAppendingPathComponent:@"xh_debug.log"];

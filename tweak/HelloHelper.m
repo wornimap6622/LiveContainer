@@ -51,28 +51,9 @@
 
 @implementation HelloHelper
 
-// 日志: NSLog + 追加写文件 (写到沙盒 Documents 目录, 探探一定能写)
+// 日志: 干净版完全静音 (不 NSLog 不写文件)
 + (void)log:(NSString *)fmt, ... {
-    va_list args;
-    va_start(args, fmt);
-    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:args];
-    va_end(args);
-    NSLog(@"[tspoof] %@", msg);
-    // 追加写入日志文件
-    @try {
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        NSString *dir = paths.count > 0 ? paths[0] : NSTemporaryDirectory();
-        NSString *path = [dir stringByAppendingPathComponent:@"tspoof.log"];
-        NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], msg];
-        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
-        if (!fh) {
-            [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:nil];
-            fh = [NSFileHandle fileHandleForWritingAtPath:path];
-        }
-        [fh seekToEndOfFile];
-        [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        [fh closeFile];
-    } @catch (NSException *e) {}
+    (void)fmt;
 }
 
 // 用 UTF-8 十六进制字节串构造 NSString (绕过 clang 编译期中文丢失)

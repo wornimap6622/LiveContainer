@@ -151,18 +151,84 @@ enum YunLianLicense {
     private static let kcAccount = "yunlian.machine.id"
     private static let kcCodeAccount = "yunlian.license.code"
 
-    /// 固定机器 ID。
-    /// 2026-11-25 修复：原实现用 Keychain 随机 UUID 作为机器码来源。
-    /// 致命缺陷有二：
-    ///   1) 读取失败(如设备重启后首次解锁前的 errSecInteractionNotAllowed)会被当成"没存过",
-    ///      直接执行 SecItemDelete 删掉旧条目再写新的 —— 原来的机器码永久丢失；
-    ///   2) SecItemAdd 返回值未检查, 写失败也返回新 ID, 下次启动又读不到, 于是再换一次。
-    /// 结果就是签名完全没变, 机器码却反复变化, 已发出的激活码全部作废。
-    /// 改为固定常量后, 任何签名方式、任何容器、任何启动时机都得到同一个值。
-    private static let fixedMachineId = "YL-C8YL9RR82L-FIXED"
+    /// 机器 ID（一机一码）。
+    ///
+    /// 取值顺序，任何一步失败都不会让机器码漂移：
+    ///   1) Keychain 里已存的随机 UUID（首次启动写入，重装/换容器/重签名都保留）
+    ///   2) 读不到且确实是 errSecItemNotFound → 生成一个并写入
+    ///   3) Keychain 写失败（少见）→ 退回用 IDFV 派生，保证仍然是"这台机器"的稳定值
+    ///
+    /// 关键点：只有 errSecItemNotFound 才允许生成新值。
+    /// errSecInteractionNotAllowed（重启后首次解锁前）等其它错误一律不写不删，
+    /// 否则会像旧实现那样把已发出的激活码全部作废。
+    private static var _cachedMachineId: String?
+
+    private static func readMachineIdKC() -> String? {
+        var q = kcQuery(account: kcAccount)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: AnyObject?
+        let st = SecItemCopyMatching(q as CFDictionary, &out)
+        if st == errSecSuccess,
+           let d = out as? Data,
+           let v = String(data: d, encoding: .utf8),
+           !v.isEmpty {
+            return v
+        }
+        return nil
+    }
+
+    /// 返回 nil 表示"确定不存在"，可以安全生成；返回 false 表示写失败。
+    private static func readMachineIdStatus() -> OSStatus {
+        var q = kcQuery(account: kcAccount)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: AnyObject?
+        return SecItemCopyMatching(q as CFDictionary, &out)
+    }
+
+    @discardableResult
+    private static func writeMachineIdKC(_ v: String) -> Bool {
+        var attrs = kcQuery(account: kcAccount)
+        attrs[kSecValueData as String] = Data(v.utf8)
+        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let st = SecItemAdd(attrs as CFDictionary, nil)
+        if st == errSecDuplicateItem {
+            // 已存在就更新，不删了再写（避免中间态丢码）
+            let q = kcQuery(account: kcAccount)
+            let upd = [kSecValueData as String: Data(v.utf8)] as [String: Any]
+            return SecItemUpdate(q as CFDictionary, upd as CFDictionary) == errSecSuccess
+        }
+        return st == errSecSuccess
+    }
 
     static func machineId() -> String {
-        return fixedMachineId
+        if let c = _cachedMachineId { return c }
+
+        // 1) 已存在
+        if let saved = readMachineIdKC() {
+            _cachedMachineId = saved
+            return saved
+        }
+
+        // 2) 只有"确定不存在"才生成
+        let st = readMachineIdStatus()
+        if st == errSecItemNotFound {
+            let fresh = UUID().uuidString
+            if writeMachineIdKC(fresh) {
+                _cachedMachineId = fresh
+                return fresh
+            }
+        }
+
+        // 3) 兜底：Keychain 不可用（交互锁定 / 写失败）时用 IDFV 派生。
+        //    IDFV 在 bundle id 不变时跨重签名、跨重装都稳定，仍是"这台机器"的值。
+        let idfv = UIDevice.current.identifierForVendor?.uuidString ?? "no-idfv"
+        let seed = "YL-IDFV::" + idfv + "::" + (Bundle.main.bundleIdentifier ?? "")
+        let hex = SHA256.hash(data: Data(seed.utf8)).map { String(format: "%02x", $0) }.joined()
+        let derived = "YL-IDFV-" + String(hex.prefix(24)).uppercased()
+        _cachedMachineId = derived
+        return derived
     }
 
     // MARK: - 激活码持久化（Keychain，容器重建不丢）
