@@ -92,6 +92,9 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         return sharedAppSortManager.sortedHiddenApps
     }
     
+    @State private var showBatchDelete = false
+    @State private var batchSelection: Set<String> = []
+
     var filteredApps: [LCAppModel] {
         let apps = sortedApps
         if searchContext.debouncedQuery.isEmpty {
@@ -202,6 +205,19 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                     Text("lc.appList.manageInPrimaryTip".loc).foregroundStyle(.gray).padding()
                 }
 
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        batchSelection.removeAll()
+                        showBatchDelete = true
+                    } label: {
+                        Image(systemName: "checklist")
+                    }
+                }
+            }
+            .sheet(isPresented: $showBatchDelete) {
+                batchDeleteView
             }
             .navigationBarProgressBar(show:$installprogressVisible, progress: $installProgressPercentage)
             .coordinateSpace(name: "scroll")
@@ -488,6 +504,90 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         await openWebView(urlString: urlToOpen)
         
     }
+    var batchDeleteView: some View {
+        NavigationView {
+            List {
+                ForEach(sharedModel.apps, id: \.self) { app in
+                    Section(app.displayName) {
+                        ForEach(app.uiContainers, id: \.self) { c in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(c.name)
+                                    let d = LCAppBannerRootView.spoofModelName(c.spoofModel)
+                                    Text(d.isEmpty ? "随机机型" : d)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: batchSelection.contains(c.folderName)
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(batchSelection.contains(c.folderName) ? .blue : .secondary)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if batchSelection.contains(c.folderName) {
+                                    batchSelection.remove(c.folderName)
+                                } else {
+                                    batchSelection.insert(c.folderName)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("批量删除")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { showBatchDelete = false }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(batchSelection.count == allContainerFolders.count ? "取消全选" : "全选") {
+                        if batchSelection.count == allContainerFolders.count {
+                            batchSelection.removeAll()
+                        } else {
+                            batchSelection = allContainerFolders
+                        }
+                    }
+                }
+                ToolbarItem(placement: .bottomBar) {
+                    Button(role: .destructive) {
+                        performBatchDelete()
+                    } label: {
+                        Text("删除所选 (重启生效) \(batchSelection.count)")
+                    }
+                    .disabled(batchSelection.isEmpty)
+                }
+            }
+        }
+    }
+
+    var allContainerFolders: Set<String> {
+        var set: Set<String> = []
+        for app in sharedModel.apps {
+            for c in app.uiContainers {
+                set.insert(c.folderName)
+            }
+        }
+        return set
+    }
+
+    func performBatchDelete() {
+        let fm = FileManager.default
+        for app in sharedModel.apps {
+            var keep: [LCContainer] = []
+            for c in app.uiContainers {
+                if batchSelection.contains(c.folderName) {
+                    try? fm.removeItem(at: c.containerURL)
+                } else {
+                    keep.append(c)
+                }
+            }
+            app.uiContainers = keep
+            app.appInfo.containers = keep
+        }
+        batchSelection.removeAll()
+        showBatchDelete = false
+    }
+
     func onAppear() {
         for app in sharedModel.apps {
             app.delegate = self
