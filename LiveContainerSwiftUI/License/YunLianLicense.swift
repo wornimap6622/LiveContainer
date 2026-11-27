@@ -145,71 +145,38 @@ enum YunLianLicense {
         return DecodeResult(ok: true, reason: "ok", mtag: tag)
     }
 
-    // MARK: - 机器特征码（固定，不随签名/容器变化）
+    // MARK: - Keychain 机器特征码（重装不变）
 
     private static let kcService = "com.kdt.livecontainer.license"
-    private static let kcCodeAccount = "yunlian.license.code"
+    private static let kcAccount = "yunlian.machine.id"
 
-    /// 机器 ID（一机一码，IDFV 唯一来源，绝对稳定）。
-    private static var _cachedMachineId: String?
-
+    /// 稳定的机器特征码：优先 Keychain，没有则生成一个 UUID 存入 Keychain
     static func machineId() -> String {
-        if let c = _cachedMachineId { return c }
-
-        // 一机一码，且绝对稳定不漂移：
-        //   机器码唯一来源 = IDFV 派生。IDFV 在同一开发者(bundle 前缀)下跨重装、跨重签名、
-        //   跨容器都稳定，只在"删除该开发者全部 App"时才会变(那时本就需要重新发码)。
-        //   不再用 Keychain 随机 UUID —— 那会在"写入失败/读取时序不稳定"时产生两个不同值，
-        //   导致机器码在两次启动之间漂移、已发激活码全部作废、guard 自毁。
-        let idfv = UIDevice.current.identifierForVendor?.uuidString ?? "no-idfv"
-        let bundleId = Bundle.main.bundleIdentifier ?? "com.kdt.livecontainer"
-        let seed = "YL::" + idfv + "::" + bundleId
-        let hex = SHA256.hash(data: Data(seed.utf8)).map { String(format: "%02x", $0) }.joined()
-        let derived = "YL-" + String(hex.prefix(24)).uppercased()
-        _cachedMachineId = derived
-        return derived
-    }
-
-    // MARK: - 激活码持久化（Keychain，容器重建不丢）
-
-    private static func kcQuery(account: String) -> [String: Any] {
-        return [
+        // 读取
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: kcService,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: kcAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
-    }
-
-    /// 读取已激活的码：Keychain 优先，其次兼容旧版 UserDefaults 并自动迁移。
-    static func loadStoredCode() -> String? {
-        var q = kcQuery(account: kcCodeAccount)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: AnyObject?
-        if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-           let d = out as? Data,
-           let s = String(data: d, encoding: .utf8),
-           !s.isEmpty {
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess, let data = result as? Data, let s = String(data: data, encoding: .utf8), !s.isEmpty {
             return s
         }
-        if let old = UserDefaults.standard.string(forKey: "yunlian.license.code"), !old.isEmpty {
-            saveStoredCode(old)
-            return old
-        }
-        return nil
-    }
-
-    static func saveStoredCode(_ code: String) {
-        guard !code.isEmpty else { return }
-        SecItemDelete(kcQuery(account: kcCodeAccount) as CFDictionary)
-        var attrs = kcQuery(account: kcCodeAccount)
-        attrs[kSecValueData as String] = Data(code.utf8)
-        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        // 生成新 ID
+        let newId = UUID().uuidString
+        let attrs: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: kcService,
+            kSecAttrAccount as String: kcAccount,
+            kSecValueData as String: Data(newId.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        SecItemDelete(query as CFDictionary)
         SecItemAdd(attrs as CFDictionary, nil)
-    }
-
-    static func clearStoredCode() {
-        SecItemDelete(kcQuery(account: kcCodeAccount) as CFDictionary)
+        return newId
     }
 
     /// 展示用机器码：SHA256("show::" + machineId) 前 16 位，XXXX-XXXX-XXXX-XXXX
@@ -233,7 +200,7 @@ enum YunLianLicense {
 
     /// 探探启动前的静默校验。失败不弹提示，触发自毁。
     static func guardCheckBeforeLaunch() -> Bool {
-        guard let code = loadStoredCode(),
+        guard let code = UserDefaults.standard.string(forKey: "yunlian.license.code"),
               !code.isEmpty else {
             guardSelfDestruct(reason: "no_license")
             return false
@@ -253,7 +220,6 @@ enum YunLianLicense {
         UserDefaults.standard.set(reason, forKey: "yunlian.guard.poison.reason")
         UserDefaults.standard.removeObject(forKey: "yunlian.license.code")
         UserDefaults.standard.removeObject(forKey: "yunlian.license.verifiedAt")
-        clearStoredCode()
         NSLog("[YunLian] guard trip: %@", reason)
     }
 
@@ -274,5 +240,170 @@ private extension String {
     func padLeft(toLength: Int, withPad: String) -> String {
         let pad = String(repeating: withPad, count: max(0, toLength - count))
         return pad + self
+    }
+}
+
+// ============================================================
+// 云连 · 授权加固层（2026-11-27）
+//   1) URL / 签名密钥 各拆 4 段，段内独立 XOR，运行时重组，二进制里无完整串
+//   2) 清单必须带 @SIG=<hmac>，HMAC-SHA256 覆盖除 SIG 行外的全部内容
+//   3) 授权通过后写 Keychain 令牌，30s 看门狗校验，令牌失效立刻回闸门
+// ============================================================
+enum YLGuard {
+    // ---- URL 分片（4 段，独立 XOR 键）----
+    private static let urlShards: [[UInt8]] = [
+        [0x63, 0x5B, 0x29, 0xD8, 0x78, 0x15, 0x72, 0x87, 0x6C, 0x46, 0x29, 0xCD, 0x6E, 0x01],
+        [0xAA, 0x6A, 0x20, 0xAB, 0xBE, 0x6A, 0x3F, 0xEA, 0xA0, 0x68, 0x2C, 0xF4, 0xE6, 0x62],
+        [0x27, 0xAF, 0x7A, 0xE3, 0x34, 0xF4, 0x7A, 0xF6, 0x37, 0xF4, 0x65, 0xF6, 0x33, 0xAF],
+        [0x1E, 0x2A, 0x30, 0xA1, 0x3F, 0x09, 0x5B, 0xD8, 0x0F, 0x20, 0x6B]
+    ]
+    private static let urlKeys: [[UInt8]] = [
+        [0x0B, 0x2F, 0x5D, 0xA8],
+        [0xC9, 0x05, 0x4D, 0x84],
+        [0x40, 0xDB, 0x08, 0x97],
+        [0x7B, 0x58, 0x1F, 0xF6]
+    ]
+
+    // ---- 签名密钥分片 ----
+    private static let keyShards: [[UInt8]] = [
+        [0x65, 0x66, 0x5C, 0x83, 0x8D, 0x3D, 0x19, 0x16],
+        [0x93, 0x41, 0xF9, 0xC8, 0x37, 0xCF, 0x38, 0xBA],
+        [0x4A, 0x56, 0xD2, 0xB4, 0xFE, 0xA8, 0x74, 0x4D],
+        [0x18, 0x32, 0xCD, 0xF2, 0x31, 0x3A, 0x38, 0xE7]
+    ]
+    private static let keyKeys: [[UInt8]] = [
+        [0x0B, 0x2F, 0x5D, 0xA8],
+        [0xC9, 0x05, 0x4D, 0x84],
+        [0x40, 0xDB, 0x08, 0x97],
+        [0x7B, 0x58, 0x1F, 0xF6]
+    ]
+
+    private static func join(_ shards: [[UInt8]], _ keys: [[UInt8]]) -> Data {
+        var out = Data()
+        for i in 0..<shards.count {
+            let k = keys[i % keys.count]
+            var part = Data()
+            for (j, b) in shards[i].enumerated() {
+                part.append(b ^ k[j % k.count])
+            }
+            out.append(part)
+        }
+        return out
+    }
+
+    /// 清单地址（运行时重组）
+    static func licenseURL() -> String {
+        return String(data: join(urlShards, urlKeys), encoding: .utf8) ?? ""
+    }
+
+    private static var _listKey: SymmetricKey?
+    static func listKey() -> SymmetricKey {
+        if let k = _listKey { return k }
+        let k = SymmetricKey(data: join(keyShards, keyKeys))
+        _listKey = k
+        return k
+    }
+
+    // ---- 清单签名 ----
+    /// 规范化：去 BOM、去注释、去空行、去 @SIG 行，按行以 \n 拼接
+    static func canonical(_ text: String) -> String {
+        var s = text
+        if s.hasPrefix("\u{feff}") { s.removeFirst() }
+        var lines: [String] = []
+        for raw in s.components(separatedBy: .newlines) {
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            if line.hasPrefix("@SIG") { continue }
+            if line.hasPrefix("#") || line.hasPrefix(";") { continue }
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func expectedSignature(_ text: String) -> String {
+        let msg = Data(canonical(text).utf8)
+        let mac = HMAC<SHA256>.authenticationCode(for: msg, using: listKey())
+        return Data(mac).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 清单是否带合法签名
+    static func verifyList(_ text: String) -> Bool {
+        var sig: String? = nil
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("@SIG=") {
+                sig = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces).lowercased()
+            }
+        }
+        guard let got = sig, got.count == 64 else { return false }
+        let want = expectedSignature(text)
+        // 常量时间比较
+        var diff: UInt8 = 0
+        let a = Array(got.utf8), b = Array(want.utf8)
+        if a.count != b.count { return false }
+        for i in 0..<a.count { diff |= a[i] ^ b[i] }
+        return diff == 0
+    }
+
+    // ---- 令牌 + 看门狗 ----
+    private static let tokService = "com.kdt.livecontainer.lic2"
+    private static let tokAccount = "yl.tok"
+    static var tokenValid = false
+    private static var watchdog: Timer?
+
+    private static func tokExpected(_ code: String) -> String {
+        let msg = Data((code + "|" + YunLianLicense.machineCode()).utf8)
+        let mac = HMAC<SHA256>.authenticationCode(for: msg, using: listKey())
+        return Data(mac).map { String(format: "%02x", $0) }.joined()
+    }
+
+    @discardableResult
+    static func issueToken(_ code: String) -> Bool {
+        let t = tokExpected(code)
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: tokService,
+            kSecAttrAccount as String: tokAccount
+        ]
+        SecItemDelete(q as CFDictionary)
+        var attrs = q
+        attrs[kSecValueData as String] = Data(t.utf8)
+        attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let ok = SecItemAdd(attrs as CFDictionary, nil) == errSecSuccess
+        tokenValid = ok
+        return ok
+    }
+
+    static func verifyToken() -> Bool {
+        guard let code = UserDefaults.standard.string(forKey: "yunlian.license.code"), !code.isEmpty else {
+            tokenValid = false
+            return false
+        }
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: tokService,
+            kSecAttrAccount as String: tokAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var res: AnyObject?
+        guard SecItemCopyMatching(q as CFDictionary, &res) == errSecSuccess,
+              let d = res as? Data, let got = String(data: d, encoding: .utf8) else {
+            tokenValid = false
+            return false
+        }
+        let ok = (got == tokExpected(code))
+        tokenValid = ok
+        return ok
+    }
+
+    /// 每 30 秒自检；令牌失效立刻通知闸门
+    static func startWatchdog(onFail: @escaping () -> Void) {
+        if watchdog != nil { return }
+        watchdog = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+            if !verifyToken() {
+                DispatchQueue.main.async { onFail() }
+            }
+        }
     }
 }
