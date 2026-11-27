@@ -9,6 +9,36 @@ import UIKit
 final class LCAppBannerRootView: UIView {
     static let bannerHeight: CGFloat = 88
 
+    static func spoofModelName(_ machine: String) -> String {
+        let map: [String: String] = [
+            "iPhone12,1": "iPhone 11",
+            "iPhone12,3": "iPhone 11 Pro",
+            "iPhone12,5": "iPhone 11 Pro Max",
+            "iPhone12,8": "iPhone SE (2nd)",
+            "iPhone13,1": "iPhone 12 mini",
+            "iPhone13,2": "iPhone 12",
+            "iPhone13,3": "iPhone 12 Pro",
+            "iPhone13,4": "iPhone 12 Pro Max",
+            "iPhone14,2": "iPhone 13 Pro",
+            "iPhone14,3": "iPhone 13 Pro Max",
+            "iPhone14,4": "iPhone 13 mini",
+            "iPhone14,5": "iPhone 13",
+            "iPhone14,7": "iPhone 14",
+            "iPhone14,8": "iPhone 14 Plus",
+            "iPhone15,2": "iPhone 14 Pro",
+            "iPhone15,3": "iPhone 14 Pro Max",
+            "iPhone15,4": "iPhone 15",
+            "iPhone15,5": "iPhone 15 Plus",
+            "iPhone16,1": "iPhone 15 Pro",
+            "iPhone16,2": "iPhone 15 Pro Max",
+            "iPhone17,1": "iPhone 16 Pro",
+            "iPhone17,2": "iPhone 16 Pro Max",
+            "iPhone17,3": "iPhone 16",
+            "iPhone17,4": "iPhone 16 Plus"
+        ]
+        return map[machine] ?? ""
+    }
+
     let runControl = LCAppBannerRunControl()
 
     private let visualBackgroundView = UIView()
@@ -17,6 +47,7 @@ final class LCAppBannerRootView: UIView {
     private let versionLabel = UILabel()
     private let remarkLabel = UILabel()
     private let containerLabel = UILabel()
+    private let modelLabel = UILabel()
     private let sharedBadge = LCAppBannerBadgeView(symbolName: "arrowshape.turn.up.left.fill")
     private let jitBadge = LCAppBannerBadgeView(symbolName: "bolt.fill")
     private let lockBadge = LCAppBannerBadgeView(symbolName: "lock.fill")
@@ -61,6 +92,7 @@ final class LCAppBannerRootView: UIView {
         configureLabel(versionLabel, font: .systemFont(ofSize: 12))
         configureLabel(remarkLabel, font: .systemFont(ofSize: 10))
         configureLabel(containerLabel, font: .systemFont(ofSize: 8))
+        configureLabel(modelLabel, font: .systemFont(ofSize: 8))
 
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nameLabel.setContentHuggingPriority(.required, for: .horizontal)
@@ -86,6 +118,7 @@ final class LCAppBannerRootView: UIView {
         detailStack.addArrangedSubview(versionLabel)
         detailStack.addArrangedSubview(remarkLabel)
         detailStack.addArrangedSubview(containerLabel)
+        detailStack.addArrangedSubview(modelLabel)
         detailStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         detailStack.isAccessibilityElement = true
 
@@ -146,6 +179,11 @@ final class LCAppBannerRootView: UIView {
         remarkLabel.isHidden = model.uiRemark.isEmpty
         containerLabel.text = model.uiSelectedContainer?.name ?? "lc.appBanner.noDataFolder".loc
         containerLabel.textColor = textColor
+        let spoofMachine = model.uiSelectedContainer?.spoofModel ?? ""
+        let spoofName = LCAppBannerRootView.spoofModelName(spoofMachine)
+        modelLabel.text = spoofName.isEmpty ? "" : "伪装: " + spoofName
+        modelLabel.textColor = textColor.withAlphaComponent(0.85)
+        modelLabel.isHidden = spoofName.isEmpty
 
         sharedBadge.isHidden = !model.uiIsShared
         sharedBadge.backgroundColor = UIColor(named: "BadgeColor") ?? .systemOrange
