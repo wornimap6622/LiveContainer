@@ -27,6 +27,11 @@ private let SPOOF_MODELS: [(machine: String, name: String)] = [
     ("iPhone13,1", "iPhone 12 mini"),
     ("iPhone13,2", "iPhone 12"),
     ("iPhone13,3", "iPhone 12 Pro"),
+    ("iPhone13,4", "iPhone 12 Pro Max"),
+    ("iPhone14,4", "iPhone 13 mini"),
+    ("iPhone14,5", "iPhone 13"),
+    ("iPhone14,7", "iPhone 14"),
+    ("iPhone14,8", "iPhone 14 Plus"),
     ("iPhone14,2", "iPhone 13 Pro"),
     ("iPhone14,3", "iPhone 13 Pro Max"),
     ("iPhone15,2", "iPhone 14 Pro"),
@@ -156,6 +161,31 @@ struct LCContainerView : View {
                 }
 
                 Section {
+                    Toggle(isOn: $container.spoofLocationEnabled) {
+                        Text("伪装定位")
+                    }
+                    .onChange(of: container.spoofLocationEnabled) { _ in
+                        saveContainer()
+                    }
+                    if container.spoofLocationEnabled {
+                        NavigationLink {
+                            LCLocationPickerView(latitude: $container.spoofLatitude,
+                                                 longitude: $container.spoofLongitude) {
+                                saveContainer()
+                            }
+                        } label: {
+                            HStack {
+                                Text("选择位置")
+                                Spacer()
+                                Text(locationSummary).foregroundStyle(.gray)
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("开启后，容器内 App 读到的定位为本机所选坐标")
+                }
+
+                Section {
                     if inUse {
                         Text("lc.container.inUse".loc)
                             .foregroundStyle(.gray)
@@ -275,6 +305,13 @@ struct LCContainerView : View {
         
     }
     
+    var locationSummary: String {
+        if container.spoofLatitude == 0 && container.spoofLongitude == 0 {
+            return "未选择"
+        }
+        return String(format: "%.5f, %.5f", container.spoofLatitude, container.spoofLongitude)
+    }
+
     func saveIDFV() {
         guard let newIDFV = UUID(uuidString: typingIDFV) else {
             errorInfo = "lc.container.invalidIDFV".loc
@@ -388,6 +425,124 @@ struct LCContainerView : View {
         } catch {
             errorInfo = error.localizedDescription
             errorShow = true
+        }
+    }
+}
+
+
+// MARK: - 定位选点（地图搜索 + 长按选点）
+import MapKit
+
+struct LCLocationPickerView: View {
+    @Binding var latitude: Double
+    @Binding var longitude: Double
+    var onDone: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var query: String = ""
+    @State private var pin: CLLocationCoordinate2D
+    @State private var region: MKCoordinateRegion
+    @State private var searching = false
+
+    init(latitude: Binding<Double>, longitude: Binding<Double>, onDone: @escaping () -> Void) {
+        self._latitude = latitude
+        self._longitude = longitude
+        self.onDone = onDone
+        let lat = latitude.wrappedValue == 0 ? 39.9042 : latitude.wrappedValue
+        let lon = longitude.wrappedValue == 0 ? 116.4074 : longitude.wrappedValue
+        let c = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        self._pin = State(initialValue: c)
+        self._region = State(initialValue: MKCoordinateRegion(center: c,
+            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)))
+    }
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                HStack {
+                    TextField("搜索地点", text: $query)
+                        .textFieldStyle(.roundedBorder)
+                    Button("搜索") { search() }
+                        .disabled(query.isEmpty || searching)
+                }
+                .padding()
+
+                LCLongPressMap(pin: $pin, region: $region)
+                    .ignoresSafeArea(edges: .bottom)
+
+                HStack {
+                    Text(String(format: "%.5f, %.5f", pin.latitude, pin.longitude))
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("保存") {
+                        latitude = pin.latitude
+                        longitude = pin.longitude
+                        onDone()
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding()
+            }
+            .navigationTitle("选择位置")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func search() {
+        searching = true
+        let req = MKLocalSearch.Request()
+        req.naturalLanguageQuery = query
+        MKLocalSearch(request: req).start { resp, _ in
+            searching = false
+            guard let item = resp?.mapItems.first else { return }
+            let c = item.placemark.coordinate
+            pin = c
+            region = MKCoordinateRegion(center: c,
+                span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02))
+        }
+    }
+}
+
+struct LCLongPressMap: UIViewRepresentable {
+    @Binding var pin: CLLocationCoordinate2D
+    @Binding var region: MKCoordinateRegion
+
+    func makeUIView(context: Context) -> MKMapView {
+        let mv = MKMapView()
+        mv.delegate = context.coordinator
+        mv.setRegion(region, animated: false)
+        let lp = UILongPressGestureRecognizer(target: context.coordinator,
+                                              action: #selector(Coordinator.onLongPress(_:)))
+        mv.addGestureRecognizer(lp)
+        return mv
+    }
+
+    func updateUIView(_ uiView: MKMapView, context: Context) {
+        if uiView.region.center.latitude != region.center.latitude ||
+            uiView.region.center.longitude != region.center.longitude {
+            uiView.setRegion(region, animated: true)
+        }
+        uiView.removeAnnotations(uiView.annotations)
+        let a = MKPointAnnotation()
+        a.coordinate = pin
+        uiView.addAnnotation(a)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, MKMapViewDelegate {
+        var parent: LCLongPressMap
+        init(_ p: LCLongPressMap) { parent = p }
+
+        @objc func onLongPress(_ g: UILongPressGestureRecognizer) {
+            guard g.state == .began, let mv = g.view as? MKMapView else { return }
+            let pt = g.location(in: mv)
+            parent.pin = mv.convert(pt, toCoordinateFrom: mv)
         }
     }
 }
