@@ -22,9 +22,10 @@ final class YunLianLicenseService: ObservableObject {
     /// 清单缓存时长
     private let listTTL: TimeInterval = 90
     /// 离线宽限（在线校验失败后允许离线启动的时长）
-    private let offlineGrace: TimeInterval = 4 * 24 * 3600
+    private let offlineGrace: TimeInterval = 12 * 3600
 
     private var listCache: (at: Date, map: [String: Bool])?
+    private var refreshTimer: Timer?
 
     // MARK: - 清单拉取
 
@@ -49,7 +50,7 @@ final class YunLianLicenseService: ObservableObject {
         }
         let text = String(data: data, encoding: .utf8) ?? ""
         // 清单签名校验：无 @SIG 或验签失败一律视为无效清单
-        guard YLGuard.verifyList(text) else { throw YunLianAuthError.emptyList }
+        guard YLGuard.verifyList(text) else { throw YunLianAuthError.badSignature }
         let map = parseList(text)
         guard !map.isEmpty else { throw YunLianAuthError.emptyList }
         listCache = (now, map)
@@ -131,12 +132,22 @@ final class YunLianLicenseService: ObservableObject {
 
     // MARK: - 启动校验
 
-    func checkOnLaunch() async {
-        state = .checking
+    func checkOnLaunch(silent: Bool = false) async {
+        if !silent { state = .checking }
         // 30 秒看门狗：令牌被清/被改 → 立刻回闸门
         YLGuard.startWatchdog { [weak self] in
             guard let self else { return }
             self.state = .needsActivation(reason: "token")
+        }
+        if refreshTimer == nil {
+            refreshTimer = Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if case .authorized = self.state {
+                        await self.checkOnLaunch(silent: true)
+                    }
+                }
+            }
         }
         // 是否有已激活的码
         guard let code = UserDefaults.standard.string(forKey: "yunlian.license.code"),
@@ -154,8 +165,19 @@ final class YunLianLicenseService: ObservableObject {
         let ownTag = YunLianLicense.machineTag(YunLianLicense.machineCode())
 
         var map: [String: Bool]?
+        var sigBad = false
         do { map = try await fetchList(force: false) }
+        catch let e as YunLianAuthError {
+            if case .badSignature = e { sigBad = true }
+            map = nil
+        }
         catch { map = nil }
+
+        // 清单签名无效 = 有人改了清单 → 直接拒绝，不给离线宽限
+        if sigBad {
+            state = .needsActivation(reason: "signature")
+            return
+        }
 
         if map == nil {
             // 离线：宽限期内放行
@@ -182,6 +204,7 @@ enum YunLianAuthError: Error {
     case badURL
     case network
     case emptyList
+    case badSignature
 }
 
 enum YunLianAuthState {
