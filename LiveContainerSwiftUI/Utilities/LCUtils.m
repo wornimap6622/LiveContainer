@@ -521,6 +521,50 @@ static void XHLocSpoof_startUpdating(id self, SEL _cmd) {
     }
 }
 
+static void (*XHOrigRequestLocation)(id, SEL) = NULL;
+static void (*XHOrigRequestAuth)(id, SEL) = NULL;
+static IMP XHOrigAuthStatus = NULL;
+
+static void XHLocSpoof_pushFake(id manager, double la, double lo) {
+    CLLocation *loc = [[CLLocation alloc] initWithLatitude:la longitude:lo];
+    id delegate = nil;
+    @try { delegate = [manager valueForKey:@"delegate"]; } @catch (__unused NSException *e) { delegate = nil; }
+    if (!delegate) return;
+    if ([delegate respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [(id<CLLocationManagerDelegate>)delegate locationManager:manager
+                                                   didUpdateLocations:@[loc]];
+        });
+    }
+}
+
+static void XHLocSpoof_requestLocation(id self, SEL _cmd) {
+    double la = 0, lo = 0;
+    if (!XHLocSpoofRead(&la, &lo)) {
+        if (XHOrigRequestLocation) XHOrigRequestLocation(self, _cmd);
+        return;
+    }
+    XHLocSpoof_pushFake(self, la, lo);
+}
+
+static void XHLocSpoof_requestAuth(id self, SEL _cmd) {
+    double la = 0, lo = 0;
+    if (!XHLocSpoofRead(&la, &lo)) {
+        if (XHOrigRequestAuth) XHOrigRequestAuth(self, _cmd);
+        return;
+    }
+    id delegate = nil;
+    @try { delegate = [self valueForKey:@"delegate"]; } @catch (__unused NSException *e) { delegate = nil; }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (delegate && [delegate respondsToSelector:@selector(locationManagerDidChangeAuthorization:)]) {
+            [(id<CLLocationManagerDelegate>)delegate locationManagerDidChangeAuthorization:self];
+        } else if (delegate && [delegate respondsToSelector:@selector(locationManager:didChangeAuthorizationStatus:)]) {
+            [(id<CLLocationManagerDelegate>)delegate locationManager:self
+                                      didChangeAuthorizationStatus:kCLAuthorizationStatusAuthorizedWhenInUse];
+        }
+    });
+}
+
 __attribute__((constructor))
 static void XHLocSpoofInstall(void) {
     Class cls = NSClassFromString(@"CLLocationManager");
@@ -534,5 +578,33 @@ static void XHLocSpoofInstall(void) {
     if (mStart) {
         XHOrigStartUpdating = (void (*)(id, SEL))method_getImplementation(mStart);
         method_setImplementation(mStart, (IMP)XHLocSpoof_startUpdating);
+    }
+
+    // 单次定位：探探二进制里引用 2 次，必须拦
+    Method mReq = class_getInstanceMethod(cls, @selector(requestLocation));
+    if (mReq) {
+        XHOrigRequestLocation = (void (*)(id, SEL))method_getImplementation(mReq);
+        method_setImplementation(mReq, (IMP)XHLocSpoof_requestLocation);
+    }
+
+    // 申请授权：不弹系统框，直接回报已授权
+    Method mAuthReq = class_getInstanceMethod(cls, @selector(requestWhenInUseAuthorization));
+    if (mAuthReq) {
+        XHOrigRequestAuth = (void (*)(id, SEL))method_getImplementation(mAuthReq);
+        method_setImplementation(mAuthReq, (IMP)XHLocSpoof_requestAuth);
+    }
+
+    // 权限状态：探探引用 7 次，直接返回 authorizedWhenInUse
+    Method mStatus = class_getClassMethod(cls, @selector(authorizationStatus));
+    if (mStatus) {
+        XHOrigAuthStatus = method_getImplementation(mStatus);
+        method_setImplementation(mStatus, imp_implementationWithBlock(^CLAuthorizationStatus(id _self) {
+            double la = 0, lo = 0;
+            if (XHLocSpoofRead(&la, &lo)) return kCLAuthorizationStatusAuthorizedWhenInUse;
+            if (XHOrigAuthStatus) {
+                return ((CLAuthorizationStatus (*)(id, SEL))XHOrigAuthStatus)(_self, @selector(authorizationStatus));
+            }
+            return kCLAuthorizationStatusNotDetermined;
+        }));
     }
 }
