@@ -33,7 +33,7 @@ final class YunLianLicenseService: ObservableObject {
         if !force, let c = listCache, now.timeIntervalSince(c.at) < listTTL {
             return c.map
         }
-        let urlStr = YunLianLicense.dec(YunLianLicense.eURL) + "?ts=" + String(Int(now.timeIntervalSince1970 * 1000))
+        let urlStr = YLGuard.licenseURL() + "?ts=" + String(Int(now.timeIntervalSince1970 * 1000))
         guard let url = URL(string: urlStr) else { throw YunLianAuthError.badURL }
 
         var req = URLRequest(url: url)
@@ -48,6 +48,8 @@ final class YunLianLicenseService: ObservableObject {
             throw YunLianAuthError.network
         }
         let text = String(data: data, encoding: .utf8) ?? ""
+        // 清单签名校验：无 @SIG 或验签失败一律视为无效清单
+        guard YLGuard.verifyList(text) else { throw YunLianAuthError.emptyList }
         let map = parseList(text)
         guard !map.isEmpty else { throw YunLianAuthError.emptyList }
         listCache = (now, map)
@@ -121,8 +123,7 @@ final class YunLianLicenseService: ObservableObject {
         if r.ok {
             UserDefaults.standard.set(code, forKey: "yunlian.license.code")
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "yunlian.license.verifiedAt")
-            // 同时写 Keychain：重装云连/换容器后 UserDefaults 会丢，Keychain 不会
-            YunLianLicense.saveStoredCode(code)
+            YLGuard.issueToken(code)
             state = .authorized
         }
         return r
@@ -132,10 +133,21 @@ final class YunLianLicenseService: ObservableObject {
 
     func checkOnLaunch() async {
         state = .checking
-        // 是否有已激活的码（Keychain 优先，容器重建也能恢复）
-        guard let code = YunLianLicense.loadStoredCode(),
+        // 30 秒看门狗：令牌被清/被改 → 立刻回闸门
+        YLGuard.startWatchdog { [weak self] in
+            guard let self else { return }
+            self.state = .needsActivation(reason: "token")
+        }
+        // 是否有已激活的码
+        guard let code = UserDefaults.standard.string(forKey: "yunlian.license.code"),
               !code.isEmpty else {
             state = .needsActivation(reason: "no_session")
+            return
+        }
+
+        // 本地令牌自检：令牌缺失/被篡改 → 直接回闸门（防清 UserDefaults 绕过）
+        if !YLGuard.verifyToken() {
+            state = .needsActivation(reason: "token")
             return
         }
 
