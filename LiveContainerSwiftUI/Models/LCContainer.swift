@@ -30,7 +30,8 @@ class LCContainer : ObservableObject, Hashable {
     @Published public var spoofModel: String = ""
     @Published public var spoofLocationEnabled: Bool = false
     @Published public var spoofLatitude: Double = 0
-    @Published public var spoofLongitude: Double = 0   // 伪造机型 machine 标识（如 iPhone16,1），空=随机
+    @Published public var spoofLongitude: Double = 0
+    @Published public var spoofLocationName: String = ""   // 伪造机型 machine 标识（如 iPhone16,1），空=随机
     private var infoDict : [String:Any]?
     public var containerURL : URL {
         if let resolvedContainerURL {
@@ -147,7 +148,8 @@ class LCContainer : ObservableObject, Hashable {
             "spoofModel": spoofModel,
             "spoofLocationEnabled": spoofLocationEnabled,
             "spoofLatitude": spoofLatitude,
-            "spoofLongitude": spoofLongitude
+            "spoofLongitude": spoofLongitude,
+            "spoofLocationName": spoofLocationName
         ]
         if let spoofedIdentifier {
             infoDict!["spoofedIdentifierForVendor"] = spoofedIdentifier
@@ -183,6 +185,7 @@ class LCContainer : ObservableObject, Hashable {
         spoofLocationEnabled = infoDict["spoofLocationEnabled"] as? Bool ?? false
         spoofLatitude = infoDict["spoofLatitude"] as? Double ?? 0
         spoofLongitude = infoDict["spoofLongitude"] as? Double ?? 0
+        spoofLocationName = infoDict["spoofLocationName"] as? String ?? ""
     }
     
     static func == (lhs: LCContainer, rhs: LCContainer) -> Bool {
