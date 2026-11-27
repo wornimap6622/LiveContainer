@@ -121,6 +121,10 @@ class LCContainer : ObservableObject, Hashable {
                 spoofIdentifierForVendor = plistInfo["spoofIdentifierForVendor"] as? Bool ?? false
                 spoofedIdentifier = plistInfo["spoofedIdentifierForVendor"] as? String
                 spoofModel = plistInfo["spoofModel"] as? String ?? ""
+                spoofLocationEnabled = plistInfo["spoofLocationEnabled"] as? Bool ?? false
+                spoofLatitude = plistInfo["spoofLatitude"] as? Double ?? 0
+                spoofLongitude = plistInfo["spoofLongitude"] as? Double ?? 0
+                spoofLocationName = plistInfo["spoofLocationName"] as? String ?? ""
             }
         } catch {
             
