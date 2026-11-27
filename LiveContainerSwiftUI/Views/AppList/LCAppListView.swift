@@ -93,6 +93,8 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     }
     
     @State private var showBatchDelete = false
+    @State private var selectionMode = false
+    @State private var selectedFolders: Set<String> = []
     @State private var batchSelection: Set<String> = []
 
     var filteredApps: [LCAppModel] {
@@ -136,7 +138,19 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 
                 LazyVStack {
                     ForEach(filteredApps, id: \.self) { app in
-                        LCAppBanner(appModel: app, delegate: self)
+                        ZStack(alignment: .topTrailing) {
+                            LCAppBanner(appModel: app, delegate: self)
+                            if selectionMode {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { toggleAppSelection(app) }
+                                Image(systemName: appSelectionMark(app) ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(appSelectionMark(app) ? Color.blue : Color.secondary)
+                                    .padding(10)
+                                    .allowsHitTesting(false)
+                            }
+                        }
                     }
                     .transition(.scale)
                 }
@@ -209,15 +223,35 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        batchSelection.removeAll()
-                        showBatchDelete = true
+                        selectionMode.toggle()
+                        if !selectionMode { selectedFolders.removeAll() }
                     } label: {
-                        Image(systemName: "checklist")
+                        Image(systemName: selectionMode ? "xmark.circle" : "checklist")
                     }
                 }
             }
-            .sheet(isPresented: $showBatchDelete) {
-                batchDeleteView
+            .safeAreaInset(edge: .bottom) {
+                if selectionMode {
+                    HStack(spacing: 14) {
+                        Button("全选") { selectAllContainers() }
+                            .buttonStyle(.bordered)
+                        Spacer()
+                        Text("已选 \(selectedFolders.count)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button(role: .destructive) {
+                            deleteSelectedNow()
+                        } label: {
+                            Text("删除")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(selectedFolders.isEmpty)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+                    .background(.thinMaterial)
+                }
             }
             .navigationBarProgressBar(show:$installprogressVisible, progress: $installProgressPercentage)
             .coordinateSpace(name: "scroll")
@@ -504,6 +538,55 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         await openWebView(urlString: urlToOpen)
         
     }
+    // MARK: - 列表内勾选删除（立即生效，无需重启）
+
+    func appSelectionMark(_ app: LCAppModel) -> Bool {
+        let ids = app.uiContainers.map { $0.folderName }
+        return !ids.isEmpty && ids.allSatisfy { selectedFolders.contains($0) }
+    }
+
+    func toggleAppSelection(_ app: LCAppModel) {
+        let ids = app.uiContainers.map { $0.folderName }
+        if ids.allSatisfy({ selectedFolders.contains($0) }) {
+            for i in ids { selectedFolders.remove(i) }
+        } else {
+            for i in ids { selectedFolders.insert(i) }
+        }
+    }
+
+    func selectAllContainers() {
+        var all: Set<String> = []
+        for app in sharedModel.apps {
+            for c in app.uiContainers { all.insert(c.folderName) }
+        }
+        if selectedFolders.count == all.count {
+            selectedFolders.removeAll()
+        } else {
+            selectedFolders = all
+        }
+    }
+
+    func deleteSelectedNow() {
+        let fm = FileManager.default
+        for app in sharedModel.apps {
+            let hit = app.uiContainers.filter { selectedFolders.contains($0.folderName) }
+            if hit.isEmpty { continue }
+            for c in hit {
+                try? fm.removeItem(at: LCPath.dataPath.appendingPathComponent(c.folderName))
+                LCUtils.removeAppKeychain(dataUUID: c.folderName)
+                DataManager.shared.model.appDataFolderNames.removeAll { $0 == c.folderName }
+            }
+            app.uiContainers.removeAll { selectedFolders.contains($0.folderName) }
+            app.appInfo.containers = app.uiContainers
+            if app.uiContainers.isEmpty {
+                removeApp(app: app)
+            }
+        }
+        selectedFolders.removeAll()
+        selectionMode = false
+        sharedModel.objectWillChange.send()
+    }
+
     var batchDeleteView: some View {
         NavigationView {
             List {
