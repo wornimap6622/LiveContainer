@@ -170,7 +170,8 @@ struct LCContainerView : View {
                     if container.spoofLocationEnabled {
                         NavigationLink {
                             LCLocationPickerView(latitude: $container.spoofLatitude,
-                                                 longitude: $container.spoofLongitude) {
+                                                 longitude: $container.spoofLongitude,
+                                                 name: $container.spoofLocationName) {
                                 saveContainer()
                             }
                         } label: {
@@ -306,6 +307,9 @@ struct LCContainerView : View {
     }
     
     var locationSummary: String {
+        if !container.spoofLocationName.isEmpty {
+            return container.spoofLocationName
+        }
         if container.spoofLatitude == 0 && container.spoofLongitude == 0 {
             return "未选择"
         }
@@ -436,6 +440,7 @@ import MapKit
 struct LCLocationPickerView: View {
     @Binding var latitude: Double
     @Binding var longitude: Double
+    @Binding var name: String
     var onDone: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -444,9 +449,11 @@ struct LCLocationPickerView: View {
     @State private var region: MKCoordinateRegion
     @State private var searching = false
 
-    init(latitude: Binding<Double>, longitude: Binding<Double>, onDone: @escaping () -> Void) {
+    init(latitude: Binding<Double>, longitude: Binding<Double>,
+         name: Binding<String>, onDone: @escaping () -> Void) {
         self._latitude = latitude
         self._longitude = longitude
+        self._name = name
         self.onDone = onDone
         let lat = latitude.wrappedValue == 0 ? 39.9042 : latitude.wrappedValue
         let lon = longitude.wrappedValue == 0 ? 116.4074 : longitude.wrappedValue
@@ -475,10 +482,7 @@ struct LCLocationPickerView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                     Button("保存") {
-                        latitude = pin.latitude
-                        longitude = pin.longitude
-                        onDone()
-                        dismiss()
+                        saveWithName()
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -489,6 +493,26 @@ struct LCLocationPickerView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
+            }
+        }
+    }
+
+    private func saveWithName() {
+        let loc = CLLocation(latitude: pin.latitude, longitude: pin.longitude)
+        CLGeocoder().reverseGeocodeLocation(loc) { placemarks, _ in
+            var parts: [String] = []
+            if let p = placemarks?.first {
+                for s in [p.administrativeArea, p.locality, p.subLocality] {
+                    if let s = s, !s.isEmpty, !parts.contains(s) { parts.append(s) }
+                }
+                if parts.isEmpty, let n = p.name, !n.isEmpty { parts.append(n) }
+            }
+            DispatchQueue.main.async {
+                latitude = pin.latitude
+                longitude = pin.longitude
+                name = parts.joined(separator: "·")
+                onDone()
+                dismiss()
             }
         }
     }
