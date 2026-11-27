@@ -459,3 +459,80 @@
 
 
 @end
+
+
+// ============================================================
+// 云连 · 定位伪装（2026-11-27）
+// 读取当前容器 LCContainerInfo.plist 的 spoofLocationEnabled / spoofLatitude / spoofLongitude，
+// 在进程内替换 CLLocationManager 的 location / startUpdatingLocation，
+// 让容器里的 App（含探探）读到云连设置的位置。
+// ============================================================
+@import CoreLocation;
+
+static BOOL XHLocSpoofRead(double *lat, double *lon) {
+    const char *home = getenv("LC_HOME_PATH");
+    if (!home) return NO;
+    NSString *h = [NSString stringWithUTF8String:home];
+    NSArray<NSString *> *cands = @[
+        [h stringByAppendingPathComponent:@"LCContainerInfo.plist"],
+        [[h stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"LCContainerInfo.plist"]
+    ];
+    for (NSString *path in cands) {
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:path];
+        if (!d) continue;
+        if (![d[@"spoofLocationEnabled"] boolValue]) return NO;
+        double la = [d[@"spoofLatitude"] doubleValue];
+        double lo = [d[@"spoofLongitude"] doubleValue];
+        if (la == 0 && lo == 0) return NO;
+        *lat = la; *lon = lo;
+        return YES;
+    }
+    return NO;
+}
+
+static IMP XHOrigLocation = NULL;
+static void (*XHOrigStartUpdating)(id, SEL) = NULL;
+
+static CLLocation *XHLocSpoof_location(id self, SEL _cmd) {
+    double la = 0, lo = 0;
+    if (XHLocSpoofRead(&la, &lo)) {
+        return [[CLLocation alloc] initWithLatitude:la longitude:lo];
+    }
+    return ((CLLocation *(*)(id, SEL))XHOrigLocation)(self, _cmd);
+}
+
+static void XHLocSpoof_startUpdating(id self, SEL _cmd) {
+    if (XHOrigStartUpdating) XHOrigStartUpdating(self, _cmd);
+    double la = 0, lo = 0;
+    if (!XHLocSpoofRead(&la, &lo)) return;
+    CLLocation *loc = [[CLLocation alloc] initWithLatitude:la longitude:lo];
+    id delegate = nil;
+    @try { delegate = [self valueForKey:@"delegate"]; } @catch (__unused NSException *e) { delegate = nil; }
+    if (!delegate) return;
+    if ([delegate respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {
+        __weak id weakDelegate = delegate;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            id strongDelegate = weakDelegate;
+            if (strongDelegate) {
+                [(id<CLLocationManagerDelegate>)strongDelegate locationManager:self
+                                                            didUpdateLocations:@[loc]];
+            }
+        });
+    }
+}
+
+__attribute__((constructor))
+static void XHLocSpoofInstall(void) {
+    Class cls = NSClassFromString(@"CLLocationManager");
+    if (!cls) return;
+    Method mLocation = class_getInstanceMethod(cls, @selector(location));
+    if (mLocation) {
+        XHOrigLocation = method_getImplementation(mLocation);
+        method_setImplementation(mLocation, (IMP)XHLocSpoof_location);
+    }
+    Method mStart = class_getInstanceMethod(cls, @selector(startUpdatingLocation));
+    if (mStart) {
+        XHOrigStartUpdating = (void (*)(id, SEL))method_getImplementation(mStart);
+        method_setImplementation(mStart, (IMP)XHLocSpoof_startUpdating);
+    }
+}
