@@ -177,7 +177,10 @@ final class LCAppBannerRootView: UIView {
         remarkLabel.text = model.uiRemark
         remarkLabel.textColor = textColor.withAlphaComponent(0.8)
         remarkLabel.isHidden = model.uiRemark.isEmpty
-        containerLabel.text = model.uiSelectedContainer?.name ?? "lc.appBanner.noDataFolder".loc
+        let locName = model.uiSelectedContainer?.spoofLocationName ?? ""
+        containerLabel.text = locName.isEmpty
+            ? (model.uiSelectedContainer?.name ?? "lc.appBanner.noDataFolder".loc)
+            : locName
         containerLabel.textColor = textColor
         let spoofMachine = model.uiSelectedContainer?.spoofModel ?? ""
         let spoofName = LCAppBannerRootView.spoofModelName(spoofMachine)
