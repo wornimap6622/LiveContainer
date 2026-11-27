@@ -64,6 +64,7 @@ struct LCContainerView : View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var sharedModel : SharedModel
     @State private var typingContainerName : String = ""
+    @State private var showLocationPicker = false
     @State private var typingIDFV: String = ""
     @State private var inUse = false
     @State private var runningLC : String? = nil
@@ -168,17 +169,20 @@ struct LCContainerView : View {
                         saveContainer()
                     }
                     if container.spoofLocationEnabled {
-                        NavigationLink {
-                            LCLocationPickerView(latitude: $container.spoofLatitude,
-                                                 longitude: $container.spoofLongitude,
-                                                 name: $container.spoofLocationName) {
-                                saveContainer()
-                            }
+                        Button {
+                            showLocationPicker = true
                         } label: {
                             HStack {
                                 Text("选择位置")
                                 Spacer()
                                 Text(locationSummary).foregroundStyle(.gray)
+                            }
+                        }
+                        .sheet(isPresented: $showLocationPicker) {
+                            LCLocationPickerView(latitude: $container.spoofLatitude,
+                                                 longitude: $container.spoofLongitude,
+                                                 name: $container.spoofLocationName) {
+                                saveContainer()
                             }
                         }
                     }
@@ -447,6 +451,7 @@ struct LCLocationPickerView: View {
     @State private var query: String = ""
     @State private var pin: CLLocationCoordinate2D
     @State private var region: MKCoordinateRegion
+    @State private var results: [MKMapItem] = []
     @State private var searching = false
 
     init(latitude: Binding<Double>, longitude: Binding<Double>,
@@ -464,36 +469,68 @@ struct LCLocationPickerView: View {
     }
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                HStack {
-                    TextField("搜索地点", text: $query)
-                        .textFieldStyle(.roundedBorder)
-                    Button("搜索") { search() }
-                        .disabled(query.isEmpty || searching)
-                }
-                .padding()
+        VStack(spacing: 0) {
+            HStack {
+                Text("选择位置").font(.headline)
+                Spacer()
+                Button("取消") { dismiss() }
+            }
+            .padding(.horizontal)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
 
-                LCLongPressMap(pin: $pin, region: $region)
-                    .ignoresSafeArea(edges: .bottom)
+            HStack(spacing: 8) {
+                TextField("搜索地点", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .submitLabel(.search)
+                    .onSubmit { search() }
+                Button(searching ? "搜索中" : "搜索") { search() }
+                    .disabled(query.isEmpty || searching)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 6)
 
-                HStack {
-                    Text(String(format: "%.5f, %.5f", pin.latitude, pin.longitude))
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("保存") {
-                        saveWithName()
+            if !results.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(results, id: \.self) { item in
+                            Button {
+                                let c = item.placemark.coordinate
+                                pin = c
+                                region = MKCoordinateRegion(center: c,
+                                    span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02))
+                                results = []
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.name ?? "地点")
+                                        .foregroundStyle(.primary)
+                                    Text(item.placemark.title ?? "")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 7)
+                                .padding(.horizontal)
+                            }
+                        }
                     }
+                }
+                .frame(maxHeight: 190)
+                .background(Color(.secondarySystemBackground))
+            }
+
+            LCLongPressMap(pin: $pin, region: $region)
+                .ignoresSafeArea(edges: .bottom)
+
+            HStack {
+                Text(String(format: "%.5f, %.5f", pin.latitude, pin.longitude))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("保存") { saveWithName() }
                     .buttonStyle(.borderedProminent)
-                }
-                .padding()
             }
-            .navigationTitle("选择位置")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
-            }
+            .padding()
         }
     }
 
@@ -521,13 +558,15 @@ struct LCLocationPickerView: View {
         searching = true
         let req = MKLocalSearch.Request()
         req.naturalLanguageQuery = query
+        req.region = region
         MKLocalSearch(request: req).start { resp, _ in
             searching = false
-            guard let item = resp?.mapItems.first else { return }
-            let c = item.placemark.coordinate
-            pin = c
-            region = MKCoordinateRegion(center: c,
-                span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02))
+            results = resp?.mapItems ?? []
+            if let first = results.first {
+                let c = first.placemark.coordinate
+                region = MKCoordinateRegion(center: c,
+                    span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03))
+            }
         }
     }
 }
