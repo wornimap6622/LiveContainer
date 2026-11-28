@@ -540,26 +540,27 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     }
     // MARK: - 列表内勾选删除（立即生效，无需重启）
 
+    // 按 App 包选择，空容器（"数据文件夹未创建"）也能被批量选中
+    func appSelectionID(_ app: LCAppModel) -> String {
+        return "app|\(app.appInfo.relativeBundlePath ?? app.displayName)"
+    }
+
     func appSelectionMark(_ app: LCAppModel) -> Bool {
-        let ids = app.uiContainers.map { $0.folderName }
-        return !ids.isEmpty && ids.allSatisfy { selectedFolders.contains($0) }
+        return selectedFolders.contains(appSelectionID(app))
     }
 
     func toggleAppSelection(_ app: LCAppModel) {
-        let ids = app.uiContainers.map { $0.folderName }
-        if ids.allSatisfy({ selectedFolders.contains($0) }) {
-            for i in ids { selectedFolders.remove(i) }
+        let id = appSelectionID(app)
+        if selectedFolders.contains(id) {
+            selectedFolders.remove(id)
         } else {
-            for i in ids { selectedFolders.insert(i) }
+            selectedFolders.insert(id)
         }
     }
 
     func selectAllContainers() {
-        var all: Set<String> = []
-        for app in sharedModel.apps {
-            for c in app.uiContainers { all.insert(c.folderName) }
-        }
-        if selectedFolders.count == all.count {
+        let all = Set(sharedModel.apps.map { appSelectionID($0) })
+        if selectedFolders.count == all.count && all.count > 0 {
             selectedFolders.removeAll()
         } else {
             selectedFolders = all
@@ -568,19 +569,22 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
 
     func deleteSelectedNow() {
         let fm = FileManager.default
-        for app in sharedModel.apps {
-            let hit = app.uiContainers.filter { selectedFolders.contains($0.folderName) }
-            if hit.isEmpty { continue }
-            for c in hit {
-                try? fm.removeItem(at: LCPath.dataPath.appendingPathComponent(c.folderName))
+        let appsToDelete = sharedModel.apps.filter { selectedFolders.contains(appSelectionID($0)) }
+        for app in appsToDelete {
+            // 先删容器数据，与单个删除保持一致
+            for c in app.uiContainers {
+                try? fm.removeItem(at: c.containerURL)
                 LCUtils.removeAppKeychain(dataUUID: c.folderName)
                 DataManager.shared.model.appDataFolderNames.removeAll { $0 == c.folderName }
             }
-            app.uiContainers.removeAll { selectedFolders.contains($0.folderName) }
-            app.appInfo.containers = app.uiContainers
-            if app.uiContainers.isEmpty {
-                removeApp(app: app)
+            app.uiContainers.removeAll()
+            app.appInfo.containers = []
+            // 关键：必须删掉 .app 包，否则云连重启重新扫描又会加回来
+            if let bundlePath = app.appInfo.bundlePath() {
+                try? fm.removeItem(atPath: bundlePath)
             }
+            app.uiSelectedContainer = nil
+            removeApp(app: app)
         }
         selectedFolders.removeAll()
         selectionMode = false
@@ -660,15 +664,22 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             for c in app.uiContainers {
                 if batchSelection.contains(c.folderName) {
                     try? fm.removeItem(at: c.containerURL)
+                    LCUtils.removeAppKeychain(dataUUID: c.folderName)
+                    DataManager.shared.model.appDataFolderNames.removeAll { $0 == c.folderName }
                 } else {
                     keep.append(c)
                 }
             }
             app.uiContainers = keep
             app.appInfo.containers = keep
+            if keep.isEmpty, let bundlePath = app.appInfo.bundlePath() {
+                try? fm.removeItem(atPath: bundlePath)
+                removeApp(app: app)
+            }
         }
         batchSelection.removeAll()
         showBatchDelete = false
+        sharedModel.objectWillChange.send()
     }
 
     func onAppear() {
@@ -814,61 +825,21 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
             throw "lc.appList.infoPlistCannotReadError".loc
         }
 
-        var appRelativePath = "\(newAppInfo.bundleIdentifier()!.sanitizeNonACSII()).app"
+        let bundleId = newAppInfo.bundleIdentifier() ?? "app"
+        var appRelativePath = "\(bundleId.sanitizeNonACSII()).app"
         var outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)
-        var appToReplace : LCAppModel? = nil
-        // Folder exist! show alert for user to choose which bundle to replace
-        var sameBundleIdApp = sharedModel.apps.filter { app in
-            return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
+        let appToReplace : LCAppModel? = nil
+        let hasSameBundle = sharedModel.apps.contains { app in
+            app.appInfo.bundleIdentifier() == newAppInfo.bundleIdentifier()
+        } || sharedModel.hiddenApps.contains { app in
+            app.appInfo.bundleIdentifier() == newAppInfo.bundleIdentifier()
         }
-        if sameBundleIdApp.count == 0 {
-            sameBundleIdApp = sharedModel.hiddenApps.filter { app in
-                return app.appInfo.bundleIdentifier()! == newAppInfo.bundleIdentifier()
-            }
-            
-            // we found a hidden app, we need to authenticate before proceeding
-            if sameBundleIdApp.count > 0 && !sharedModel.isHiddenAppUnlocked {
-                do {
-                    if !(try await LCUtils.authenticateUser()) {
-                        self.installprogressVisible = false
-                        return
-                    }
-                } catch {
-                    errorInfo = error.localizedDescription
-                    errorShow = true
-                    self.installprogressVisible = false
-                    return
-                }
-            }
-            
-        }
-        
-        if fm.fileExists(atPath: outputFolder.path) || sameBundleIdApp.count > 0 {
-            appRelativePath = "\(newAppInfo.bundleIdentifier()!)_\(Int(CFAbsoluteTimeGetCurrent())).app"
-            
-            self.installOptions = [AppReplaceOption(isReplace: false, nameOfFolderToInstall: appRelativePath)]
-            
-            for app in sameBundleIdApp {
-                self.installOptions.append(AppReplaceOption(isReplace: true, nameOfFolderToInstall: app.appInfo.relativeBundlePath, appToReplace: app))
-            }
-
-            guard let installOptionChosen = await installReplaceAlert.open() else {
-                // user cancelled
-                self.installprogressVisible = false
-                try fm.removeItem(at: payloadPath)
-                return
-            }
-            
-            if let appToReplace = installOptionChosen.appToReplace, appToReplace.uiIsShared {
-                outputFolder = LCPath.lcGroupBundlePath.appendingPathComponent(installOptionChosen.nameOfFolderToInstall)
-            } else {
-                outputFolder = LCPath.bundlePath.appendingPathComponent(installOptionChosen.nameOfFolderToInstall)
-            }
-            appRelativePath = installOptionChosen.nameOfFolderToInstall
-            appToReplace = installOptionChosen.appToReplace
-            if installOptionChosen.isReplace {
-                try fm.removeItem(at: outputFolder)
-            }
+        // 默认始终安装为新 App，不再弹同名替换选择窗
+        if fm.fileExists(atPath: outputFolder.path) || hasSameBundle {
+            repeat {
+                appRelativePath = "\(bundleId)_\(Int(CFAbsoluteTimeGetCurrent() * 1000))_\(Int.random(in: 100...999)).app"
+                outputFolder = LCPath.bundlePath.appendingPathComponent(appRelativePath)
+            } while fm.fileExists(atPath: outputFolder.path)
         }
         // Move it!
         try fm.moveItem(at: appFolderPath, to: outputFolder)
